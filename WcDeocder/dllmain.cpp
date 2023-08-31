@@ -311,7 +311,7 @@ extern "C" __declspec(dllexport) size_t __stdcall decode_bitmap(
 
     cpr(0, img); // auto compress
 
-    cv::imwrite(".cache\\bitmap.jpg", img);
+    // cv::imwrite(".cache\\bitmap.jpg", img);
 
     size_t count = 0;
 
