@@ -309,7 +309,7 @@ extern "C" __declspec(dllexport) size_t __stdcall decode_bitmap(
     // 从BYTE*创建cv::Mat对象
     cv::Mat img(height, width, CV_8UC(nChannels), imgBuffer, stride);
 
-    cpr(0, img); // auto compress
+    // cpr(0, img); // auto compress
 
     // cv::imwrite(".cache\\bitmap.jpg", img);
 
