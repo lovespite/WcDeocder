@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -58,7 +60,9 @@ namespace wcd.net
                         using (var bmp2 = CaptureScreen())
                             ScanBitmap(bmp2);
                         break;
-
+                    case "-e":
+                        GetContours(args[2], float.Parse(args[1]));
+                        break;
                     default:
                         PrintUsage();
                         break;
@@ -76,7 +80,7 @@ namespace wcd.net
             }
 
 #if DEBUG
-            Console.ReadKey();
+            // Console.ReadKey();
 #endif
 
             void PrintUsage()
@@ -84,6 +88,7 @@ namespace wcd.net
                 Console.WriteLine("Usage: wcd.net -f <img_path>");
                 Console.WriteLine("       wcd.net -u <url>");
                 Console.WriteLine("       wcd.net -c");
+                Console.WriteLine("       wct.net -e <img_path>, extract contours");
             }
         }
 
@@ -141,6 +146,21 @@ namespace wcd.net
                 g.CopyFromScreen(0, 0, 0, 0, bmp.Size);
             }
             return bmp;
+        }
+
+
+        public static void GetContours(string f, float threshold = 200f)
+        {
+            f = @"C:\Users\visitor\Pictures\Screenshots\s1.bmp";
+            if (!System.IO.File.Exists(f)) throw new System.IO.FileNotFoundException(f); 
+
+            using (var bmp = new Bitmap(f))
+            { 
+                var ret = Prune(bmp);
+                if (ret is null) return;
+                ret.Save(@".cache\1_contours.png");
+                ret.Dispose();
+            }
         }
     }
 }

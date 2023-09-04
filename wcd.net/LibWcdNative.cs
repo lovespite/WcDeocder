@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Runtime.InteropServices;
@@ -23,6 +25,7 @@ namespace wcd.net
         [StructLayout(LayoutKind.Sequential)]
         public struct WRESULT : IDisposable
         {
+            public static readonly int StructSize = Marshal.SizeOf<WRESULT>();
             public uint data_len;
             public uint points_len;
             public IntPtr points;
@@ -72,7 +75,6 @@ namespace wcd.net
             }
         }
 
-        public static readonly int WRESULT_SZ = Marshal.SizeOf<WRESULT>();
 
         [DllImport(NativeDllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int init_model();
@@ -99,7 +101,7 @@ namespace wcd.net
         public static WRESULT[] Decode(string img_path, uint cpr_quality = 0)
         {
             const int count = 288; // 288 is the max count of results = 72 * 4  
-            int bufferSize = count * WRESULT_SZ;
+            int bufferSize = count * WRESULT.StructSize;
 
             IntPtr pResult = Marshal.AllocHGlobal(bufferSize);
             long lpResult = pResult.ToInt64();
@@ -119,7 +121,7 @@ namespace wcd.net
                 WRESULT[] results = new WRESULT[ret];
                 for (long i = 0; i < ret; i++)
                 {
-                    results[i] = Marshal.PtrToStructure<WRESULT>(new IntPtr(lpResult + WRESULT_SZ * i));
+                    results[i] = Marshal.PtrToStructure<WRESULT>(new IntPtr(lpResult + WRESULT.StructSize * i));
                 }
                 return results;
             }
@@ -137,7 +139,7 @@ namespace wcd.net
         public static WRESULT[] DecodeBitmap(System.Drawing.Bitmap img)
         {
             const int count = 288; // 288 is the max count of results = 72 * 4
-            int bufferSize = count * WRESULT_SZ;
+            int bufferSize = count * WRESULT.StructSize;
             IntPtr pResult = Marshal.AllocHGlobal(bufferSize);
             long lpResult = pResult.ToInt64();
 
@@ -164,7 +166,7 @@ namespace wcd.net
                 var results = new WRESULT[ret];
                 for (long i = 0; i < ret; i++)
                 {
-                    results[i] = Marshal.PtrToStructure<WRESULT>(new IntPtr(lpResult + WRESULT_SZ * i));
+                    results[i] = Marshal.PtrToStructure<WRESULT>(new IntPtr(lpResult + WRESULT.StructSize * i));
                 }
 
                 return results;
@@ -173,7 +175,7 @@ namespace wcd.net
             {
                 Marshal.FreeHGlobal(pResult);
                 img.UnlockBits(data);
-            } 
+            }
         }
 
         public static uint GetImageChannelCount(PixelFormat format)
@@ -195,6 +197,100 @@ namespace wcd.net
 
                 default:
                     return 3;
+            }
+        }
+
+        [DllImport(NativeDllName, EntryPoint = "prune", CallingConvention = CallingConvention.Cdecl)]
+        public static extern ulong prune(ref ImageInfo imgInfo, ref ContourParameter parameters);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct CRESULT
+        {
+            public uint size;
+            public IntPtr data;
+
+            public static readonly int StructSize = Marshal.SizeOf<CRESULT>();
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct ImageInfo : IDisposable
+        {
+            public IntPtr imgBuffer;     // 图像数据的指针
+            public IntPtr imgResult;     // 识别结果的缓冲区
+            public ulong resultDataSize;  // 缓冲区的大小
+            public uint width;           // 图像的宽度
+            public uint height;          // 图像的高度
+            public uint stride;          // 图像的行跨度（每行的字节数）
+            public uint nChannels;       // 图像的通道数
+
+            public void Dispose()
+            {
+                Marshal.FreeHGlobal(imgResult);
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct ContourParameter
+        {
+            public float area_threshold; // 最小边长, default: 1000
+            public float binarize;       // 二值化阈值: default: 225
+            public float canny_low;      // canny 边缘检测的低阈值, default: 50
+            public float canny_high;     // canny 边缘检测的高阈值, default: 100 
+
+            public static ContourParameter Default => new ContourParameter
+            {
+                area_threshold = 1150,
+                binarize = 225,
+                canny_low = 50,
+                canny_high = 100
+            };
+        }
+
+        public static Bitmap Prune(Bitmap img, ContourParameter? parameters = null)
+        {
+            var width = (uint)img.Width;
+            var height = (uint)img.Height;
+
+            var data = img.LockBits(
+                new Rectangle(0, 0, img.Width, img.Height),
+                ImageLockMode.ReadWrite,
+                img.PixelFormat
+            );
+
+            ImageInfo image = new ImageInfo()
+            {
+                imgBuffer = data.Scan0,
+                width = width,
+                height = height,
+            };
+            try
+            {
+                image.stride = (uint)data.Stride;
+                image.nChannels = GetImageChannelCount(img.PixelFormat);
+
+                ContourParameter p = ContourParameter.Default;
+
+                var ret = (long)prune(ref image, ref p);
+
+                if (ret <= 0) return null;
+
+                var dataSize = image.resultDataSize;
+                if (dataSize <= 0) return null;
+                if (image.imgResult == IntPtr.Zero) return null;
+
+                var buffer = new byte[dataSize];
+                Marshal.Copy(image.imgResult, buffer, 0, (int)dataSize);
+
+                using (var ms = new MemoryStream(buffer))
+                {
+                    var rstImg = Image.FromStream(ms);
+                    return new Bitmap(rstImg);
+                }
+            }
+            finally
+            {
+                image.Dispose();
+                img.UnlockBits(data);
             }
         }
     }

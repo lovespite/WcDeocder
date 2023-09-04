@@ -144,6 +144,10 @@
       <AdditionalLibraryDirectories>D:\opencv2\install\x64\vc17\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>opencv_world480.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>copy $(OutputPath)$(TargetFileName) $(SolutionDir)wcd.net\bin\x64\Debug\$(TargetFileName)
+copy $(OutputPath)$(TargetFileName) $(SolutionDir)wcd.net\bin\x64\Release\$(TargetFileName)</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="framework.h" />

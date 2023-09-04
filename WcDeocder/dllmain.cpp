@@ -1,5 +1,7 @@
 ﻿// dllmain.cpp : 定义 DLL 应用程序的入口点。
 #include "pch.h"
+#include <stdio.h>
+#include <fstream>
 
 BOOL APIENTRY DllMain(HMODULE hModule,
     DWORD  ul_reason_for_call,
@@ -57,6 +59,12 @@ public:
             data = nullptr;
         }
     }
+};
+
+struct CRESULT
+{
+    UINT data_len;
+    BYTE* data;
 };
 
 void compress_img_to_gray(cv::Mat& img, int quality)
@@ -156,6 +164,7 @@ size_t decode_mat_internal(cv::Mat& img, WRESULT* result_buffer, size_t buffer_s
     return count;
 }
 
+
 extern "C" __declspec(dllexport) int __stdcall init_model()
 {
     last_error = "";
@@ -251,7 +260,7 @@ extern "C" __declspec(dllexport) size_t __stdcall decode(const char* img_path, W
     }
 
     // 压缩图片
-    cpr(compr_quality, img); 
+    cpr(compr_quality, img);
 
     size_t count = 0;
 
@@ -337,4 +346,194 @@ extern "C" __declspec(dllexport) int __stdcall get_last_error(char* err, int len
 
     memcpy_s(err, len, last_error.c_str(), last_error.length());
     return last_error.size();
+}
+
+float distanceOf(const cv::Point2f& p1, const cv::Point2f& p2)
+{
+    float dx = p1.x - p2.x;
+    float dy = p1.y - p2.y;
+    return sqrt(dx * dx + dy * dy);
+}
+
+struct ImageInfo {
+    BYTE* imgBuffer;  // 图像数据的指针
+    BYTE* imgResult;  // 识别结果的缓冲区
+    size_t resultDataSize;  // 缓冲区的大小
+    uint width;       // 图像的宽度
+    uint height;      // 图像的高度
+    uint stride;      // 图像的行跨度（每行的字节数）
+    uint nChannels;   // 图像的通道数
+};
+
+struct ContourParameter {
+    float area_threshold; // 最小边长, default: 1000
+    float binarize;  // 二值化阈值: default: 225
+    float canny_low; // canny 边缘检测的低阈值, default: 50
+    float canny_high; // canny 边缘检测的高阈值, default: 100
+};
+
+void find_bbox(
+    std::vector<std::vector<cv::Point>>& contours,
+    cv::RotatedRect& rotatedRect,
+    std::vector<cv::Point2f>& vertices,
+    cv::Rect& bbox,
+    const ContourParameter& param
+)
+{
+    for (const auto& cnt : contours) {
+        // 计算最小外接矩形
+        rotatedRect = cv::minAreaRect(cnt);
+        rotatedRect.points(vertices.data());
+
+        // 获取矩形区域
+        bbox = rotatedRect.boundingRect();
+
+        auto sz = rotatedRect.size;
+        if (sz.width < param.area_threshold || sz.height < param.area_threshold) continue;
+        // 找到需要处理的区域
+        break;
+    }
+}
+
+bool rotate_crop_slice(cv::RotatedRect& rotatedRect, const cv::Mat& crop, cv::Mat& rotated)
+{
+    float angle = rotatedRect.angle;
+
+    // 仿射变换
+    if (std::abs(angle) > 0 && std::abs(angle) <= 45) {
+        angle = angle;
+    }
+    else if (std::abs(angle) > 45 && std::abs(angle) < 90) {
+        angle = angle - 90;
+    }
+    else
+        angle = 0; // 无需旋转 
+
+    if (angle == 0)
+    {
+        rotated = crop;
+        return false; // no need re-process
+    }
+
+    // 获取旋转矩阵 
+    cv::Mat rot_mat = cv::getRotationMatrix2D(rotatedRect.center, angle, 1.0);
+
+    // 旋转图像 
+    cv::warpAffine(crop, rotated, rot_mat, crop.size(), cv::INTER_LINEAR);
+
+    return true; // need re-process
+}
+
+void save_to(cv::Mat& rotated, ImageInfo& info)
+{
+    // 将裁剪后的区域保存到 BYTE*
+    std::vector<BYTE> buffer;
+    cv::imencode(".png", rotated, buffer);
+
+    info.resultDataSize = buffer.size(); // 保存结果的缓冲区大小  
+    info.imgResult = new BYTE[info.resultDataSize]; // 保存结果的缓冲区  
+    memcpy_s(info.imgResult, info.resultDataSize, buffer.data(), info.resultDataSize);
+}
+
+void draw_debug(std::vector<cv::Point2f>& vertices, cv::Mat& image, cv::RotatedRect& rotatedRect, cv::Rect& bbox)
+{
+    // 绘制矩形，用于调试
+    std::vector<std::vector<cv::Point> > pts;
+    pts.push_back(std::vector<cv::Point>(vertices.begin(), vertices.end()));
+
+    // 绘制中心点
+    cv::circle(image, rotatedRect.center, 5, cv::Scalar(0, 0, 255), 5);
+
+    // 绘制第一个顶点
+    cv::circle(image, vertices[0], 5, cv::Scalar(0, 0, 255), 5);
+    std::string a("angle: " + std::to_string(rotatedRect.angle));
+    cv::putText(image, a, cv::Point(vertices[0].x, vertices[0].y - 25), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 0, 255), 2);
+
+    cv::polylines(image, pts, true, cv::Scalar(0, 0, 255), 4);
+    cv::rectangle(image, bbox, cv::Scalar(0, 255, 0), 2);
+
+    std::string text = std::to_string(bbox.size().width) + "x" + std::to_string(bbox.size().height);
+    cv::putText(image, text, cv::Point(bbox.x, bbox.y - 5), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 0, 255), 2);
+
+    cv::imwrite(".cache/contours.jpg", image);
+}
+
+void binarize(cv::Mat& image, cv::Mat& bin, const ContourParameter& param)
+{
+    cv::cvtColor(image, bin, cv::COLOR_BGR2GRAY); // 转换为灰度图像  
+    cv::threshold(bin, bin, param.binarize, 255, cv::THRESH_BINARY); // 二值化 
+}
+
+size_t extract_contours_internal(cv::Mat& src, cv::Mat& image, ImageInfo& info, const ContourParameter& param)
+{
+    // std::ofstream ofs(".cache/internal_log.txt", std::ios::out | std::ios::trunc);
+
+    cv::Mat edges;
+    cv::Mat rotated;
+
+    int processCount = 0; // 处理的轮数
+    size_t count = 0;
+
+    cv::RotatedRect rotatedRect;
+    cv::Rect bbox;
+    std::vector<cv::Point2f> vertices(4);
+    std::vector<std::vector<cv::Point>> contours;
+
+canny:
+    cv::Canny(src, edges, param.canny_low, param.canny_high, 3);
+    cv::findContours(edges, contours, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+
+    find_bbox(contours, rotatedRect, vertices, bbox, param);
+
+    //ofs << "rotatedRect.angle: " << rotatedRect.angle << std::endl;
+    //ofs << "bbox: " << bbox << std::endl;
+    //ofs << "image: " << image.size() << std::endl;
+
+    auto b_sz = bbox.size();
+    auto i_sz = image.size();
+
+    if (bbox.x < 0 || bbox.y < 0 || bbox.x + b_sz.width > i_sz.width || bbox.y + b_sz.height > i_sz.height) {
+        bbox = cv::Rect(0, 0, i_sz.width, i_sz.height);
+    }
+
+    cv::Mat cropped = image(bbox); // 裁剪出的矩形区域
+
+    // ofs << "cropped: " << cropped.size() << std::endl;
+    bool reproc_required = rotate_crop_slice(rotatedRect, cropped, rotated); // 旋转（如果有必要）裁剪出的矩形区域   
+
+    if (reproc_required && ++processCount <= 2) {
+        binarize(rotated, src, param);
+        image = rotated;
+        goto canny;
+    }
+
+    save_to(rotated, info);
+    draw_debug(vertices, image, rotatedRect, bbox);
+    return ++count;
+}
+
+extern "C" __declspec(dllexport) size_t __stdcall prune(
+    ImageInfo & info, // 图像信息
+    const ContourParameter & param  // 参数 
+)
+{
+    std::ofstream ofs(".cache/log.txt", std::ios::out | std::ios::trunc);
+
+    cv::Mat image(info.height, info.width, CV_8UC(info.nChannels), info.imgBuffer, info.stride);
+
+    cv::Mat bin;
+    binarize(image, bin, param);
+
+    // cv::imwrite(".cache/bin.jpg", bin);
+
+    try {
+        size_t count = extract_contours_internal(bin, image, info, param);
+        return count;
+    }
+    catch (const std::exception& e) {
+        ofs << e.what() << std::endl;
+        return 0;
+    }
+
+    ofs.close();
 }

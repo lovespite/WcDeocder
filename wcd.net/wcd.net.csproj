@@ -5,7 +5,7 @@
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
     <ProjectGuid>{36B74913-31B9-4C4D-84F3-53F546423D1D}</ProjectGuid>
-    <OutputType>Library</OutputType>
+    <OutputType>Exe</OutputType>
     <RootNamespace>wcd.net</RootNamespace>
     <AssemblyName>wcd.net</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
