@@ -268,7 +268,7 @@ namespace wcd.net
                 image.stride = (uint)data.Stride;
                 image.nChannels = GetImageChannelCount(img.PixelFormat);
 
-                ContourParameter p = ContourParameter.Default;
+                ContourParameter p = parameters ?? ContourParameter.Default;
 
                 var ret = (long)prune(ref image, ref p);
 
